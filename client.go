@@ -70,6 +70,11 @@ type Dialer struct {
 
 	// Subprotocols specifies the client's requested subprotocols.
 	Subprotocols []string
+
+	// SupportCompression specifies if the client should advertise the compression
+	// extension to the server. Compression is only used if the server response
+	// with support for compression.
+	SupportCompression bool
 }
 
 var errMalformedURL = errors.New("malformed ws or wss URL")
@@ -204,6 +209,9 @@ func (d *Dialer) Dial(urlStr string, requestHeader http.Header) (*Conn, *http.Re
 	if len(d.Subprotocols) > 0 {
 		req.Header["Sec-WebSocket-Protocol"] = []string{strings.Join(d.Subprotocols, ", ")}
 	}
+	if d.SupportCompression {
+		req.Header["Sec-Websocket-Extensions"] = []string{"permessage-deflate"}
+	}
 	for k, vs := range requestHeader {
 		switch {
 		case k == "Host":
@@ -315,7 +323,6 @@ func (d *Dialer) Dial(urlStr string, requestHeader http.Header) (*Conn, *http.Re
 	}
 
 	conn := newConn(netConn, false, d.ReadBufferSize, d.WriteBufferSize)
-
 	if err := req.Write(netConn); err != nil {
 		return nil, nil, err
 	}
@@ -339,6 +346,20 @@ func (d *Dialer) Dial(urlStr string, requestHeader http.Header) (*Conn, *http.Re
 
 	resp.Body = ioutil.NopCloser(bytes.NewReader([]byte{}))
 	conn.subprotocol = resp.Header.Get("Sec-Websocket-Protocol")
+
+	var enableCompression bool
+	extensions := parseExtensions(resp.Header)
+	for _, e := range extensions {
+		for _, v := range e {
+			if v == "permessage-deflate" && d.SupportCompression {
+				enableCompression = true
+			}
+		}
+	}
+	if enableCompression {
+		conn.newCompressionWriter = compressNoContextTakeover
+		conn.newDecompressionReader = decompressNoContextTakeover
+	}
 
 	netConn.SetDeadline(time.Time{})
 	netConn = nil // to avoid close in defer.

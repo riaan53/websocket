@@ -321,6 +321,13 @@ func (c *Conn) RemoteAddr() net.Addr {
 	return c.conn.RemoteAddr()
 }
 
+// EnableWriteCompression enables and disables write compression of subsequent
+// text and binary messages. This function is a noop if compression was not
+// negotiated with the peer.
+func (c *Conn) EnableWriteCompression(enable bool) {
+	c.enableWriteCompression = enable
+}
+
 // Write methods
 
 func (c *Conn) write(frameType int, deadline time.Time, bufs ...[]byte) error {
