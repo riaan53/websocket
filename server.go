@@ -46,6 +46,11 @@ type Upgrader struct {
 	// CheckOrigin is nil, the host in the Origin header must not be set or
 	// must match the host of the request.
 	CheckOrigin func(r *http.Request) bool
+
+	// SupportCompression specifies if the server should respond to a compression
+	// advertisement with a confirmation. If compression is negotiated then
+	// both client and server will send compressed messages.
+	SupportCompression bool
 }
 
 func (u *Upgrader) returnError(w http.ResponseWriter, r *http.Request, status int, reason string) (*Conn, error) {
@@ -127,6 +132,17 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 
 	subprotocol := u.selectSubprotocol(r, responseHeader)
 
+	var enableCompression bool
+
+	extensions := parseExtensions(r.Header)
+	for _, e := range extensions {
+		for _, v := range e {
+			if v == "permessage-deflate" && u.SupportCompression {
+				enableCompression = true
+			}
+		}
+	}
+
 	var (
 		netConn net.Conn
 		br      *bufio.Reader
@@ -151,6 +167,10 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 
 	c := newConn(netConn, true, u.ReadBufferSize, u.WriteBufferSize)
 	c.subprotocol = subprotocol
+	if enableCompression {
+		c.newCompressionWriter = compressNoContextTakeover
+		c.newDecompressionReader = decompressNoContextTakeover
+	}
 
 	p := c.writeBuf[:0]
 	p = append(p, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "...)
@@ -161,6 +181,14 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 		p = append(p, c.subprotocol...)
 		p = append(p, "\r\n"...)
 	}
+	if enableCompression {
+		p = append(p, "Sec-Websocket-Extensions: "...)
+		p = append(p, "permessage-deflate"...)
+		p = append(p, "; client_no_context_takeover"...)
+		p = append(p, "; server_no_context_takeover"...)
+		p = append(p, "\r\n"...)
+	}
+
 	for k, vs := range responseHeader {
 		if k == "Sec-Websocket-Protocol" {
 			continue
